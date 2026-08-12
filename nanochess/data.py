@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import io
+import json
 import random
+import urllib.request
 from collections.abc import Iterator
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TextIO
 
@@ -136,3 +140,95 @@ def save_tokens(path: str | Path, tokens: torch.Tensor) -> None:
 
 def load_tokens(path: str | Path) -> torch.Tensor:
     return torch.load(Path(path), weights_only=True)
+
+
+LICHESS_URL = (
+    "https://database.lichess.org/standard/lichess_db_standard_rated_2013-01.pgn.zst"
+)
+
+
+@contextmanager
+def open_pgn(path: str | Path):
+    """Open a PGN file, decompressing zstandard transparently and incrementally.
+
+    Incrementally matters: Lichess dumps are tens of gigabytes decompressed, so
+    the reader has to stream. The smallest month is used by default precisely so
+    this stays a laptop-scale operation.
+    """
+    path = Path(path)
+    if path.suffix == ".zst":
+        import zstandard
+
+        with path.open("rb") as raw:
+            reader = zstandard.ZstdDecompressor().stream_reader(raw)
+            yield io.TextIOWrapper(reader, encoding="utf-8", errors="replace")
+    else:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            yield fh
+
+
+def download_corpus(url: str = LICHESS_URL, dest: str | Path = "data/games.pgn.zst") -> Path:
+    """Download the corpus if it is not already on disk."""
+    dest = Path(dest)
+    if dest.exists():
+        print(f"{dest} already present ({dest.stat().st_size / 1e6:.1f} MB), skipping download")
+        return dest
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    print(f"downloading {url}")
+    with urllib.request.urlopen(url) as response, dest.open("wb") as out:
+        total = int(response.headers.get("content-length", 0))
+        seen = 0
+        while chunk := response.read(1 << 20):
+            out.write(chunk)
+            seen += len(chunk)
+            if total:
+                print(f"\r  {seen / 1e6:6.1f} / {total / 1e6:.1f} MB", end="", flush=True)
+    print()
+    return dest
+
+
+def prepare_corpus(
+    pgn_path: str | Path,
+    out_dir: str | Path,
+    tokenizer,
+    game_filter: GameFilter,
+    limit: int | None = None,
+    val_fraction: float = 0.01,
+    seed: int = 0,
+) -> dict:
+    """Turn a PGN file into packed train/val token streams plus metadata."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    with open_pgn(pgn_path) as fh:
+        games = list(extract_games(fh, game_filter, limit=limit))
+
+    if not games:
+        raise ValueError(f"no games survived the filter in {pgn_path}")
+
+    train_games, val_games = split_games(games, val_fraction=val_fraction, seed=seed)
+    train_tokens = pack_games(train_games, tokenizer)
+    val_tokens = pack_games(val_games, tokenizer)
+
+    save_tokens(out_dir / "train.bin", train_tokens)
+    save_tokens(out_dir / "val.bin", val_tokens)
+    tokenizer.save(out_dir / "tokenizer.json")
+
+    # The bigram baseline is fit on moves, not token ids, so keep the raw games.
+    (out_dir / "train_games.json").write_text(json.dumps(train_games), encoding="utf-8")
+
+    stats = {
+        "source": str(pgn_path),
+        "games_kept": len(games),
+        "train_games": len(train_games),
+        "val_games": len(val_games),
+        "train_tokens": int(train_tokens.numel()),
+        "val_tokens": int(val_tokens.numel()),
+        "vocab_size": tokenizer.vocab_size,
+        "tokenizer": tokenizer.name,
+        "filter": asdict(game_filter),
+        "seed": seed,
+    }
+    (out_dir / "meta.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
+    return stats
