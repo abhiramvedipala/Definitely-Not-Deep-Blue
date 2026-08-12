@@ -76,6 +76,12 @@ class _BaseTokenizer:
         return len(self.id_to_token)
 
     @property
+    def moves(self) -> list[str]:
+        """The non-special vocabulary. Derived, not stored, so a tokenizer
+        restored from disk (which bypasses __init__) has it too."""
+        return [t for t in self.id_to_token if t not in SPECIALS]
+
+    @property
     def bos_id(self) -> int:
         return self.token_to_id[BOS]
 
@@ -109,8 +115,7 @@ class MoveTokenizer(_BaseTokenizer):
     name = "move"
 
     def __init__(self) -> None:
-        self.moves = build_move_vocab()
-        self._init_vocab(SPECIALS + self.moves)
+        self._init_vocab(SPECIALS + build_move_vocab())
 
     def encode(self, moves: list[str], add_special: bool = False) -> list[int]:
         ids = [self.token_to_id.get(m, self.unk_id) for m in moves]
