@@ -61,15 +61,14 @@ def build_move_vocab() -> list[str]:
     return sorted(moves)
 
 
-class MoveTokenizer:
-    """Move-level tokenizer over the fixed UCI vocabulary."""
+class _BaseTokenizer:
+    """Shared vocabulary bookkeeping and on-disk format."""
 
-    name = "move"
+    name = "base"
 
-    def __init__(self) -> None:
-        self.moves = build_move_vocab()
-        self.id_to_token: list[str] = SPECIALS + self.moves
-        self.token_to_id: dict[str, int] = {t: i for i, t in enumerate(self.id_to_token)}
+    def _init_vocab(self, tokens: list[str]) -> None:
+        self.id_to_token: list[str] = tokens
+        self.token_to_id: dict[str, int] = {t: i for i, t in enumerate(tokens)}
         self._special_ids = {self.token_to_id[t] for t in SPECIALS}
 
     @property
@@ -88,6 +87,31 @@ class MoveTokenizer:
     def unk_id(self) -> int:
         return self.token_to_id[UNK]
 
+    def save(self, path: str | Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"name": self.name, "tokens": self.id_to_token}
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: str | Path):
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        if payload.get("name") != cls.name:
+            raise ValueError(f"not a {cls.name} tokenizer: {payload.get('name')!r}")
+        tok = cls.__new__(cls)
+        tok._init_vocab(list(payload["tokens"]))
+        return tok
+
+
+class MoveTokenizer(_BaseTokenizer):
+    """Move-level tokenizer over the fixed UCI vocabulary. One token per ply."""
+
+    name = "move"
+
+    def __init__(self) -> None:
+        self.moves = build_move_vocab()
+        self._init_vocab(SPECIALS + self.moves)
+
     def encode(self, moves: list[str], add_special: bool = False) -> list[int]:
         ids = [self.token_to_id.get(m, self.unk_id) for m in moves]
         if add_special:
@@ -102,20 +126,46 @@ class MoveTokenizer:
             out.append(self.id_to_token[i])
         return out
 
-    def save(self, path: str | Path) -> None:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"name": self.name, "tokens": self.id_to_token}
-        path.write_text(json.dumps(payload), encoding="utf-8")
 
-    @classmethod
-    def load(cls, path: str | Path) -> MoveTokenizer:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-        if payload.get("name") != cls.name:
-            raise ValueError(f"not a {cls.name} tokenizer: {payload.get('name')!r}")
-        tok = cls.__new__(cls)
-        tok.id_to_token = list(payload["tokens"])
-        tok.moves = [t for t in tok.id_to_token if t not in SPECIALS]
-        tok.token_to_id = {t: i for i, t in enumerate(tok.id_to_token)}
-        tok._special_ids = {tok.token_to_id[t] for t in SPECIALS}
-        return tok
+class CharTokenizer(_BaseTokenizer):
+    """Character-level tokenizer over UCI text, with a space between moves.
+
+    Kept as a genuine second implementation rather than a curiosity: it proves
+    the tokenizer abstraction is real, and it makes the cost of the choice
+    measurable — the same game costs ~5x more tokens here, which is exactly why
+    the move-level tokenizer wins for a 256-token context.
+    """
+
+    name = "char"
+    SEP = " "
+
+    def __init__(self) -> None:
+        chars = [self.SEP, *sorted("abcdefgh12345678" + _PROMOTION_PIECES)]
+        self._init_vocab(SPECIALS + chars)
+
+    def encode(self, moves: list[str], add_special: bool = False) -> list[int]:
+        text = self.SEP.join(moves)
+        ids = [self.token_to_id.get(c, self.unk_id) for c in text]
+        if add_special:
+            ids = [self.bos_id, *ids, self.eos_id]
+        return ids
+
+    def decode(self, ids: list[int], keep_special: bool = False) -> list[str]:
+        chars = [
+            self.id_to_token[i]
+            for i in ids
+            if keep_special or i not in self._special_ids
+        ]
+        text = "".join(chars).strip()
+        return text.split(self.SEP) if text else []
+
+
+_REGISTRY = {cls.name: cls for cls in (MoveTokenizer, CharTokenizer)}
+
+
+def load_tokenizer(path: str | Path) -> _BaseTokenizer:
+    """Load whichever tokenizer was saved to ``path``, dispatching on its name."""
+    name = json.loads(Path(path).read_text(encoding="utf-8")).get("name")
+    if name not in _REGISTRY:
+        raise ValueError(f"unknown tokenizer {name!r}")
+    return _REGISTRY[name].load(path)
