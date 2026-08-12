@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import random
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TextIO
 
 import chess.pgn
+import torch
 
 NORMAL_TERMINATIONS = {"Normal", "Time forfeit"}
 
@@ -78,3 +81,58 @@ def extract_games(
             continue
         kept += 1
         yield game_filter.truncate(ucis)
+
+
+def pack_games(games: list[list[str]], tokenizer) -> torch.Tensor:
+    """Flatten games into one token stream: ``<bos> m1 … mN <eos>`` per game.
+
+    Packing wastes no tokens on padding, which matters when the whole budget is
+    four hours. The delimiters are what let the model learn where a game starts,
+    so sampling from ``<bos>`` produces an opening rather than a middlegame.
+    """
+    stream: list[int] = []
+    for ucis in games:
+        stream.extend(tokenizer.encode(ucis, add_special=True))
+    return torch.tensor(stream, dtype=torch.int64)
+
+
+def split_games(
+    games: list[list[str]], val_fraction: float = 0.01, seed: int = 0
+) -> tuple[list[list[str]], list[list[str]]]:
+    """Split *by game*, before packing.
+
+    Splitting after packing would cut games in half and put the first 30 plies
+    in train and the rest in val, which leaks and makes validation loss a lie.
+    """
+    shuffled = list(games)
+    random.Random(seed).shuffle(shuffled)
+    n_val = int(len(shuffled) * val_fraction)
+    return shuffled[n_val:], shuffled[:n_val]
+
+
+def get_batch(
+    data: torch.Tensor,
+    batch_size: int,
+    block_size: int,
+    device: torch.device,
+    generator: torch.Generator | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample a batch of ``(x, y)`` windows, where ``y`` is ``x`` shifted one token."""
+    high = len(data) - block_size - 1
+    assert high > 0, f"data of length {len(data)} is too short for block_size {block_size}"
+    idx = torch.randint(high, (batch_size,), generator=generator)
+    x = torch.stack([data[i : i + block_size] for i in idx])
+    y = torch.stack([data[i + 1 : i + 1 + block_size] for i in idx])
+    assert x.shape == (batch_size, block_size), x.shape
+    assert y.shape == (batch_size, block_size), y.shape
+    return x.to(device), y.to(device)
+
+
+def save_tokens(path: str | Path, tokens: torch.Tensor) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(tokens, path)
+
+
+def load_tokens(path: str | Path) -> torch.Tensor:
+    return torch.load(Path(path), weights_only=True)
