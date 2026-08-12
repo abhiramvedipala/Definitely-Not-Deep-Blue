@@ -108,3 +108,19 @@ def test_eval_reports_every_baseline_alongside_the_model(tmp_path):
     report = json.loads((out_dir / "eval.json").read_text())
     assert set(report) >= {"nanochess", "bigram", "uniform-random-token", "random-legal"}
     assert report["random-legal"]["legal_rate"] == 1.0
+
+
+def test_train_accepts_a_dropout_setting():
+    assert build_parser().parse_args(["train", "--dropout", "0.1"]).dropout == 0.1
+
+
+def test_dropout_defaults_to_zero():
+    assert build_parser().parse_args(["train"]).dropout == 0.0
+
+
+def test_model_config_passes_dropout_through_to_the_blocks():
+    from nanochess.model import NanoChessGPT, model_config
+
+    model = NanoChessGPT(model_config("tiny", vocab_size=64, dropout=0.25))
+    assert model.config.dropout == 0.25
+    assert model.blocks[0].attn.attn_dropout.p == 0.25

@@ -44,6 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--batch-size", type=int, default=32)
     train.add_argument("--lr", type=float, default=3e-4)
     train.add_argument("--warmup-steps", type=int, default=200)
+    train.add_argument("--dropout", type=float, default=0.0,
+                       help="regularisation; worth raising when the run does many epochs")
     train.add_argument("--eval-interval", type=int, default=250)
     train.add_argument("--checkpoint-interval", type=int, default=500)
     train.add_argument("--hours", type=float, default=None, help="wall-clock budget")
@@ -112,7 +114,7 @@ def cmd_train(args) -> int:
     train_data = load_tokens(data_dir / "train.bin")
     val_data = load_tokens(data_dir / "val.bin")
 
-    model_cfg = model_config(args.preset, vocab_size=tokenizer.vocab_size)
+    model_cfg = model_config(args.preset, vocab_size=tokenizer.vocab_size, dropout=args.dropout)
     train_cfg = TrainConfig(
         lr=args.lr, min_lr=args.lr / 10, warmup_steps=args.warmup_steps,
         max_steps=args.max_steps, batch_size=args.batch_size,
