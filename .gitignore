@@ -1,0 +1,28 @@
+# Data and model artifacts — never commit these
+data/
+checkpoints/
+runs/
+*.pt
+*.pgn
+*.zst
+*.bin
+*.npy
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
