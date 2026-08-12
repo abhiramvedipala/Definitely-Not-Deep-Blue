@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from nanochess.model import CausalSelfAttention, GPTConfig, MLP
+from nanochess.model import MLP, CausalSelfAttention, GPTConfig
 from nanochess.utils import set_seed
 
 CFG = GPTConfig(vocab_size=32, block_size=8, n_layer=2, n_head=2, n_embd=16)
