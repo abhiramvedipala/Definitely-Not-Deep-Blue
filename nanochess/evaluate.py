@@ -101,6 +101,23 @@ class EvalReport:
             "val_loss": self.val_loss,
         }
 
+    def bucketed_legal_rate(self, width: int = 10) -> dict[str, float]:
+        """Legality grouped into ply ranges.
+
+        Forty per-ply numbers are data; four bucket numbers are a finding. This
+        is the view that answers the question the aggregate rate hides — does
+        the model hold up through the opening and then lose the thread, or is
+        it unreliable from move one?
+        """
+        buckets: dict[str, float] = {}
+        for start in range(1, self.max_plies + 1, width):
+            end = min(start + width - 1, self.max_plies)
+            rates = [self.legal_rate_by_ply[p] for p in range(start, end + 1)
+                     if p in self.legal_rate_by_ply]
+            if rates:
+                buckets[f"{start}-{end}"] = sum(rates) / len(rates)
+        return buckets
+
     def summary(self) -> str:
         return (
             f"{self.source:<22} legal {self.legal_rate * 100:6.2f}%   "

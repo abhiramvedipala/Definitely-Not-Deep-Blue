@@ -125,3 +125,24 @@ def test_game_walk_exposes_the_move_list_actually_played():
     board = chess.Board()
     for uci in walk.played:
         board.push(chess.Move.from_uci(uci))  # must replay cleanly
+
+
+def test_bucketed_legality_groups_plies_into_ranges():
+    report = evaluate_source(ScriptedSource(LEGAL_OPENING), games=4, max_plies=6, seed=0)
+    buckets = report.bucketed_legal_rate(width=2)
+    assert list(buckets) == ["1-2", "3-4", "5-6"]
+    assert all(rate == 1.0 for rate in buckets.values())
+
+
+def test_bucketing_shows_degradation_over_the_course_of_a_game():
+    """Legal early, illegal later — the bucket table must make that visible."""
+    source = ScriptedSource(["e2e4", "e7e5", "zzzz", "zzzz"])
+    report = evaluate_source(source, games=4, max_plies=4, seed=0)
+    buckets = report.bucketed_legal_rate(width=2)
+    assert buckets["1-2"] == 1.0
+    assert buckets["3-4"] == 0.0
+
+
+def test_bucketing_handles_a_final_partial_bucket():
+    report = evaluate_source(ScriptedSource(LEGAL_OPENING), games=2, max_plies=5, seed=0)
+    assert list(report.bucketed_legal_rate(width=2)) == ["1-2", "3-4", "5-5"]

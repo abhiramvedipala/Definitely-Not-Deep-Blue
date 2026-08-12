@@ -1,4 +1,5 @@
 train tokens: 4,942,008   val tokens: 49,146
 model: 11.5M parameters on cpu
-step     25/5500  loss 7.1647  lr 7.20e-05  0.26 steps/s
-step     50/5500  loss 6.6326  lr 1.47e-04  0.21 steps/s
+step     25/3500  loss 7.0957  lr 9.60e-05  0.36 steps/s
+step     50/3500  loss 6.5425  lr 1.96e-04  0.34 steps/s
+step     75/3500  loss 6.0952  lr 2.96e-04  0.25 steps/s
