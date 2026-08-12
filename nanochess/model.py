@@ -99,3 +99,94 @@ class MLP(nn.Module):
         out = self.dropout(self.proj(h))
         assert out.shape == (B, T, C), out.shape
         return out
+
+
+class Block(nn.Module):
+    """Pre-norm transformer block: norm before each sublayer, residual around it."""
+
+    def __init__(self, config: GPTConfig) -> None:
+        super().__init__()
+        self.ln1 = nn.LayerNorm(config.n_embd)
+        self.attn = CausalSelfAttention(config)
+        self.ln2 = nn.LayerNorm(config.n_embd)
+        self.mlp = MLP(config)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        shape = x.shape
+        x = x + self.attn(self.ln1(x))
+        x = x + self.mlp(self.ln2(x))
+        assert x.shape == shape, x.shape
+        return x
+
+
+PRESETS = {
+    # 2 layers, 16 wide: fast enough that no test needs to be slow.
+    "tiny": dict(block_size=32, n_layer=2, n_head=2, n_embd=16),
+    # The real run. 256 tokens is ~128 plies, so a whole game fits in context
+    # and the model never has to reason about a position whose origin has
+    # scrolled out of the window.
+    "small": dict(block_size=256, n_layer=6, n_head=6, n_embd=384),
+}
+
+
+def model_config(preset: str, vocab_size: int, **overrides) -> GPTConfig:
+    if preset not in PRESETS:
+        raise ValueError(f"unknown preset {preset!r}; choose from {sorted(PRESETS)}")
+    return GPTConfig(vocab_size=vocab_size, **{**PRESETS[preset], **overrides})
+
+
+class NanoChessGPT(nn.Module):
+    """Decoder-only transformer over chess move tokens."""
+
+    def __init__(self, config: GPTConfig) -> None:
+        super().__init__()
+        self.config = config
+        self.token_emb = nn.Embedding(config.vocab_size, config.n_embd)
+        self.pos_emb = nn.Embedding(config.block_size, config.n_embd)
+        self.drop = nn.Dropout(config.dropout)
+        self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
+        self.ln_f = nn.LayerNorm(config.n_embd)
+        self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+        # Weight tying. Beyond saving 0.76M parameters, the input and output
+        # spaces here are literally the same set of moves, so forcing one
+        # representation is the honest modelling choice.
+        self.head.weight = self.token_emb.weight
+
+        self.apply(self._init_weights)
+
+    @staticmethod
+    def _init_weights(module: nn.Module) -> None:
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def forward(
+        self, idx: torch.Tensor, targets: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        B, T = idx.shape
+        assert T <= self.config.block_size, (
+            f"sequence length {T} exceeds block size {self.config.block_size}"
+        )
+
+        pos = torch.arange(T, device=idx.device)
+        x = self.drop(self.token_emb(idx) + self.pos_emb(pos))
+        assert x.shape == (B, T, self.config.n_embd), x.shape
+
+        for block in self.blocks:
+            x = block(x)
+
+        x = self.ln_f(x)
+        logits = self.head(x)
+        assert logits.shape == (B, T, self.config.vocab_size), logits.shape
+
+        loss = None
+        if targets is not None:
+            assert targets.shape == (B, T), targets.shape
+            loss = F.cross_entropy(
+                logits.reshape(B * T, self.config.vocab_size), targets.reshape(B * T)
+            )
+        return logits, loss
