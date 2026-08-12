@@ -139,3 +139,96 @@ def evaluate_source(source, games: int, max_plies: int, seed: int = 0) -> EvalRe
         mean_plies_to_first_illegal=sum(survivals) / len(survivals) if survivals else 0.0,
         legal_rate_by_ply=by_ply,
     )
+
+
+class ModelMoveSource:
+    """Adapts the transformer to the move-source interface the harness expects.
+
+    One judgement call is encoded here: if the model emits a special token
+    (``<eos>``, ``<pad>``, ``<unk>``) when asked for a move, that is surfaced as
+    the null move ``0000``, which is never legal, and therefore counts against
+    the model. Re-sampling until a real move appeared would quietly inflate the
+    headline number — we asked for a move and did not get one, and the metric
+    should say so.
+    """
+
+    name = "nanochess"
+
+    def __init__(
+        self,
+        model,
+        tokenizer,
+        temperature: float = 1.0,
+        top_k: int | None = None,
+        device=None,
+        forced_token: int | None = None,
+    ) -> None:
+        import torch
+
+        self.model = model
+        self.tokenizer = tokenizer
+        self.temperature = temperature
+        self.top_k = top_k
+        self.device = device or next(model.parameters()).device
+        self.forced_token = forced_token
+        self.last_prompt_length = 0
+        self._torch = torch
+        model.eval()
+
+    def next_move(self, history: list[str], board: chess.Board, rng: random.Random) -> str:
+        from .sample import sample_next
+
+        torch = self._torch
+        ids = [self.tokenizer.bos_id, *self.tokenizer.encode(history)]
+        ids = ids[-self.model.config.block_size :]
+        self.last_prompt_length = len(ids)
+
+        idx = torch.tensor([ids], dtype=torch.long, device=self.device)
+        with torch.no_grad():
+            logits, _ = self.model(idx)
+
+        if self.forced_token is not None:
+            token_id = self.forced_token
+        else:
+            # The harness owns randomness, so seed torch from its RNG to keep
+            # the whole evaluation reproducible from a single seed.
+            generator = torch.Generator(device="cpu").manual_seed(rng.randrange(2**31))
+            token_id = int(
+                sample_next(
+                    logits[:, -1, :].cpu(), self.temperature, self.top_k, generator
+                ).item()
+            )
+
+        decoded = self.tokenizer.decode([token_id])
+        return decoded[0] if decoded else "0000"
+
+
+def evaluate_model(
+    model,
+    tokenizer,
+    val_data=None,
+    games: int = 100,
+    max_plies: int = 40,
+    seed: int = 0,
+    temperature: float = 1.0,
+    top_k: int | None = None,
+    device=None,
+    batch_size: int = 16,
+    eval_batches: int = 20,
+) -> EvalReport:
+    """Run the full model evaluation: legality metrics, plus validation loss."""
+    source = ModelMoveSource(model, tokenizer, temperature, top_k, device)
+    report = evaluate_source(source, games=games, max_plies=max_plies, seed=seed)
+
+    if val_data is not None:
+        from .train import estimate_loss
+
+        report.val_loss = estimate_loss(
+            model,
+            val_data,
+            batch_size,
+            model.config.block_size,
+            device or next(model.parameters()).device,
+            batches=eval_batches,
+        )
+    return report
