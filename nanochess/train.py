@@ -17,6 +17,7 @@ import torch
 
 from .data import get_batch
 from .model import GPTConfig, NanoChessGPT
+from .plot import render_curve_svg
 from .utils import count_parameters, human_count, resolve_device, set_seed
 
 
@@ -225,6 +226,8 @@ def train(
 
     save_checkpoint(out_dir / "ckpt.pt", model, optimizer, state.step, config, state.best_val)
     (out_dir / "history.json").write_text(json.dumps(state.history), encoding="utf-8")
+    if state.history:
+        (out_dir / "curve.svg").write_text(render_curve_svg(state.history), encoding="utf-8")
     return state
 
 
