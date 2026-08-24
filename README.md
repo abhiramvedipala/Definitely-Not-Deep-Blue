@@ -1,4 +1,5 @@
-# nanochess
+# nanochess -- A GOOD PROJET TO TRAIN A CHESS ALGORITHM
+
 
 **A 11.5M-parameter transformer, trained from scratch on chess games, plays
 `97.6%` legal moves over the first 20 plies — having never been shown a board,
