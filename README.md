@@ -1,4 +1,4 @@
-# nanochess --  TRAIN A CHESS ALGORITHM
+# nanochess --  TRAIN A CHESS ALGORITHM to
 
 mdmnejajjxjdjskkJxjjedjju
 
