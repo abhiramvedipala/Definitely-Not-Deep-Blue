@@ -1,4 +1,4 @@
-# nanochess -- A GOOD PROJET TO TRAIN A CHESS ALGORITHM
+# nanochess --  TRAIN A CHESS ALGORITHM
 
 mdmnejajjxjdjskkJxjjedjju
 
